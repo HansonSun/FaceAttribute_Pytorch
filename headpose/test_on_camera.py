@@ -12,8 +12,8 @@ import torch.backends.cudnn as cudnn
 import torchvision
 import torch.nn.functional as F
 from PIL import Image
-import datasets, hopenet, utils
-import hopenet2
+import datasets, utils
+import mobilenet
 
 
 def parse_args():
@@ -31,7 +31,7 @@ if __name__ == '__main__':
     gpu = "cuda:0"
     snapshot_path = args.snapshot
 
-    model = hopenet2.Hopenet(torchvision.models.resnet.Bottleneck, [3, 4, 6, 3], 67)
+    model = mobilenet.MobileNet(67)
 
     saved_state_dict = torch.load(snapshot_path)
     model.load_state_dict(saved_state_dict)

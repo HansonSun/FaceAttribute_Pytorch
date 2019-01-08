@@ -114,3 +114,22 @@ def draw_axis(img, yaw, pitch, roll, tdx=None, tdy=None, size = 100):
     cv2.line(img, (int(tdx), int(tdy)), (int(x3),int(y3)),(255,0,0),2)
 
     return img
+
+
+
+def separate_bn_paras(modules):
+    if not isinstance(modules, list):
+        modules = [m for m in modules.modules()]
+    paras_only_bn = []
+    paras_wo_bn = []
+    for layer in modules:
+        if 'model' in str(layer.__class__):
+            continue
+        if 'container' in str(layer.__class__):
+            continue
+        else:
+            if 'batchnorm' in str(layer.__class__):
+                paras_only_bn.extend([l for l in layer.parameters()])
+            else:
+                paras_wo_bn.extend([l for l in layer.parameters()])
+    return paras_only_bn, paras_wo_bn

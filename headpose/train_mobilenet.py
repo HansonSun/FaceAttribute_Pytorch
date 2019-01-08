@@ -15,6 +15,7 @@ import torch.nn.functional as F
 
 import datasets, mobilenet
 import torch.utils.model_zoo as model_zoo
+import utils
 
 def parse_args():
     """Parse input arguments."""
@@ -22,16 +23,16 @@ def parse_args():
     parser.add_argument('--gpu', dest='gpu_id', help='GPU device id to use [0]',
             default=0, type=int)
     parser.add_argument('--num_epochs', dest='num_epochs', help='Maximum number of training epochs.',
-          default=5, type=int)
+          default=100, type=int)
     parser.add_argument('--batch_size', dest='batch_size', help='Batch size.',
           default=32, type=int)
     parser.add_argument('--lr', dest='lr', help='Base learning rate.',
-          default=0.00001, type=float)
+          default=0.01, type=float)
     parser.add_argument('--dataset', dest='dataset', help='Dataset type.', default='Pose_300W_LP', type=str)
     parser.add_argument('--data_dir', dest='data_dir', help='Directory path for data.',
           default='', type=str)
     parser.add_argument('--filename_list', dest='filename_list', help='Path to text file containing relative paths for every example.',
-          default='', type=str)
+          default='labelfile.txt', type=str)
     parser.add_argument('--output_string', dest='output_string', help='String appended to output snapshots.', default = 'test', type=str)
     parser.add_argument('--alpha', dest='alpha', help='Regression loss coefficient.',
           default=0.001, type=float)
@@ -85,31 +86,22 @@ if __name__ == '__main__':
     if not os.path.exists('output/snapshots'):
         os.makedirs('output/snapshots')
 
-    # ResNet50 structure
-    model = mobilenet.MobileNet(67)
+    # Mobilenet structure
+    model = mobilenet.MobileNet(67,0.75)
+
+    paras_only_bn, paras_wo_bn = utils.separate_bn_paras( model )
+    #print (paras_only_bn)
 
     print 'Loading data.'
 
-    transformations = transforms.Compose([transforms.Resize(72),
-    transforms.RandomCrop(60), transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+    transformations = transforms.Compose([transforms.Resize(210),
+    transforms.RandomCrop(192), transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])])
 
     if args.dataset == 'Pose_300W_LP':
         pose_dataset = datasets.Pose_300W_LP(args.data_dir, args.filename_list, transformations)
-    elif args.dataset == 'Pose_300W_LP_random_ds':
-        pose_dataset = datasets.Pose_300W_LP_random_ds(args.data_dir, args.filename_list, transformations)
     elif args.dataset == 'Synhead':
         pose_dataset = datasets.Synhead(args.data_dir, args.filename_list, transformations)
-    elif args.dataset == 'AFLW2000':
-        pose_dataset = datasets.AFLW2000(args.data_dir, args.filename_list, transformations)
-    elif args.dataset == 'BIWI':
-        pose_dataset = datasets.BIWI(args.data_dir, args.filename_list, transformations)
-    elif args.dataset == 'AFLW':
-        pose_dataset = datasets.AFLW(args.data_dir, args.filename_list, transformations)
-    elif args.dataset == 'AFLW_aug':
-        pose_dataset = datasets.AFLW_aug(args.data_dir, args.filename_list, transformations)
-    elif args.dataset == 'AFW':
-        pose_dataset = datasets.AFW(args.data_dir, args.filename_list, transformations)
     else:
         print 'Error: not a valid dataset name'
         sys.exit()
@@ -125,11 +117,20 @@ if __name__ == '__main__':
     # Regression loss coefficient
     alpha = args.alpha
 
-    softmax = nn.Softmax().cuda(gpu)
+    softmax = nn.Softmax(dim=1).cuda(gpu)
     idx_tensor = [idx for idx in xrange(67)]
     idx_tensor = Variable(torch.FloatTensor(idx_tensor)).cuda(gpu)
 
+    
     optimizer = torch.optim.Adam(model.parameters(),lr = args.lr)
+    
+
+    '''
+    optimizer = torch.optim.Adam([{'params': get_ignored_params(model), 'lr': 0},
+                                  {'params': get_non_ignored_params(model), 'lr': args.lr},
+                                  {'params': get_fc_params(model), 'lr': args.lr * 5}],
+                                   lr = args.lr)
+    '''
 
     print 'Ready to train network.'
     for epoch in range(num_epochs):
@@ -148,13 +149,19 @@ if __name__ == '__main__':
 
             # Forward pass
             yaw, pitch, roll = model(images)
-            #print (label_yaw)
+            #cal classification acc
+            yaw_acc  = yaw.argmax(dim=1).eq(label_yaw).float().mean()
+            pitch_acc= pitch.argmax(dim=1).eq(label_pitch).float().mean()
+            roll_acc = roll.argmax(dim=1).eq(label_roll).float().mean()
+
             # Cross entropy loss
             loss_yaw = criterion(yaw, label_yaw)
             #print (label_pitch)
             loss_pitch = criterion(pitch, label_pitch)
             #print (label_roll)
             loss_roll = criterion(roll, label_roll)
+
+
 
             # MSE loss
             yaw_predicted = softmax(yaw)
@@ -181,8 +188,9 @@ if __name__ == '__main__':
             optimizer.step()
     
             if (i+1) % 100 == 0:
-                print ('Epoch [%d/%d], Iter [%d/%d] Losses: Yaw %.4f, Pitch %.4f, Roll %.4f'
-                       %(epoch+1, num_epochs, i+1, len(pose_dataset)//batch_size, loss_yaw.data.item(), loss_pitch.data.item(), loss_roll.data.item()))
+                print ('Epoch [%d/%d], Iter [%d/%d] Losses: Yaw %.4f, Pitch %.4f, Roll %.4f Acc: Yaw %f Pitch %f Roll %f'
+                       %(epoch+1, num_epochs, i+1, len(pose_dataset)//batch_size, loss_yaw.data.item(), loss_pitch.data.item(), loss_roll.data.item(),
+                        (yaw_acc),(pitch_acc),(roll_acc) ))
 
         # Save models at numbered epochs.
         if epoch % 1 == 0 and epoch < num_epochs:
