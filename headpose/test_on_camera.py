@@ -14,7 +14,7 @@ import torch.backends.cudnn as cudnn
 import torchvision
 import torch.nn.functional as F
 from PIL import Image
-import datasets, hopenet, utils
+import  utils
 import importlib
 
 
@@ -25,6 +25,17 @@ def parse_args():
     args = parser.parse_args()
     return args
 
+
+def img_preprocess(img):
+    processimg=cv2.resize(img,(112,112))
+    processimg=processimg.astype(np.float32)
+    processimg=np.transpose(processimg,(2,0,1))
+    processimg=np.expand_dims(processimg,0)
+    processimg=processimg/255.0
+    processimg=(processimg-0.4)/0.2
+    return processimg
+
+
 if __name__ == '__main__':
     args = parse_args()
     fd_detector=facedetect.facedetect().get_instance()
@@ -33,7 +44,7 @@ if __name__ == '__main__':
     gpu = "cuda:0"
     snapshot_path = args.snapshot
 
-    model = importlib.import_module("hopenet").inference()
+    model = importlib.import_module("resnet").inference()
 
     saved_state_dict = torch.load(snapshot_path)
     model.load_state_dict(saved_state_dict)
@@ -60,12 +71,9 @@ if __name__ == '__main__':
         for idx, det in enumerate(dets):
 
             faceimg = det.get_roi(cv2_frame)
+            faceimg=img_preprocess(faceimg)
 
-            img = Image.fromarray(faceimg)
-            img = transformations(img)
-            img_shape = img.size()
-            img = img.view(1, img_shape[0], img_shape[1], img_shape[2])
-            img = Variable(img).cuda(gpu)
+            img = torch.from_numpy(faceimg).cuda("cuda:0")
             yaw, pitch, roll = model(img)
             yaw.squeeze_(3)
             yaw.squeeze_(2)
@@ -77,16 +85,13 @@ if __name__ == '__main__':
             roll.squeeze_(2)
 
 
-            yaw_predicted = F.softmax(yaw)
-            pitch_predicted = F.softmax(pitch)
-            roll_predicted = F.softmax(roll)
+            yaw_predicted = F.softmax(yaw,dim=1)
+            pitch_predicted = F.softmax(pitch,dim=1)
+            roll_predicted = F.softmax(roll,dim=1)
 
             yaw_predicted = torch.sum(yaw_predicted.data[0] * idx_tensor) * 3 - 99
             pitch_predicted = torch.sum(pitch_predicted.data[0] * idx_tensor) * 3 - 99
             roll_predicted = torch.sum(roll_predicted.data[0] * idx_tensor) * 3 - 99
-
-            print (yaw_predicted)
-
             #utils.plot_pose_cube(frame, yaw_predicted, pitch_predicted, roll_predicted, (det.x + det.x2) / 2, (det.y + det.y2) / 2, size = 80)
             utils.draw_axis(frame, yaw_predicted, pitch_predicted, roll_predicted, tdx = (det.x + det.x2) / 2, tdy= (det.y + det.y2) / 2, size = 80)
             cv2.rectangle(frame, (det.x, det.y), (det.x2, det.y2), (0,255,0), 1)
