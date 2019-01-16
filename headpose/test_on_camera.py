@@ -1,5 +1,7 @@
 import sys, os, argparse
 sys.path.append("/home/hanson/facetools/lib")
+sys.path.append("model")
+
 import facedetect
 import numpy as np
 import cv2
@@ -12,8 +14,8 @@ import torch.backends.cudnn as cudnn
 import torchvision
 import torch.nn.functional as F
 from PIL import Image
-import datasets, utils
-import mobilenet
+import datasets, hopenet, utils
+import importlib
 
 
 def parse_args():
@@ -31,14 +33,14 @@ if __name__ == '__main__':
     gpu = "cuda:0"
     snapshot_path = args.snapshot
 
-    model = mobilenet.MobileNet(67)
+    model = importlib.import_module("hopenet").inference()
 
     saved_state_dict = torch.load(snapshot_path)
     model.load_state_dict(saved_state_dict)
 
-    transformations = transforms.Compose([transforms.Resize(224),
-    transforms.CenterCrop(224), transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+    transformations = transforms.Compose([transforms.Resize(112),
+    transforms.CenterCrop(112), transforms.ToTensor(),
+    transforms.Normalize(mean=[0.4, 0.4, 0.4], std=[0.2, 0.2, 0.2])])
 
     model.cuda(gpu)
     model.eval()  # Change model to 'eval' mode (BN uses moving mean/var).
@@ -56,47 +58,37 @@ if __name__ == '__main__':
         dets = fd_detector.findfaces(cv2_frame)
 
         for idx, det in enumerate(dets):
-            x_min = det.left
-            y_min = det.top
-            x_max = det.right
-            y_max = det.bottom
-            conf = det.confidence
 
-            if conf > 0.5:
-                bbox_width = abs(x_max - x_min)
-                bbox_height = abs(y_max - y_min)
-                x_min -= 2 * bbox_width / 4
-                x_max += 2 * bbox_width / 4
-                y_min -= 3 * bbox_height / 4
-                y_max += bbox_height / 4
-                x_min = max(x_min, 0); y_min = max(y_min, 0)
-                x_max = min(frame.shape[1], x_max); y_max = min(frame.shape[0], y_max)
+            faceimg = det.get_roi(cv2_frame)
 
-                img = cv2_frame[y_min:y_max,x_min:x_max]
-                img = Image.fromarray(img)
-                img = transformations(img)
-                img_shape = img.size()
-                img = img.view(1, img_shape[0], img_shape[1], img_shape[2])
-                img = Variable(img).cuda(gpu)
-                print (img.shape)
-                yaw, pitch, roll = model(img)
+            img = Image.fromarray(faceimg)
+            img = transformations(img)
+            img_shape = img.size()
+            img = img.view(1, img_shape[0], img_shape[1], img_shape[2])
+            img = Variable(img).cuda(gpu)
+            yaw, pitch, roll = model(img)
+            yaw.squeeze_(3)
+            yaw.squeeze_(2)
+
+            pitch.squeeze_(3)
+            pitch.squeeze_(2)
+
+            roll.squeeze_(3)
+            roll.squeeze_(2)
 
 
-                yaw_predicted = F.softmax(yaw)
-                pitch_predicted = F.softmax(pitch)
-                roll_predicted = F.softmax(roll)
-                #print (yaw)
-                #print (yaw_predicted)
-                #print(yaw_predicted.sum())
-                #print(torch.sum(yaw_predicted.data[0] * idx_tensor))
+            yaw_predicted = F.softmax(yaw)
+            pitch_predicted = F.softmax(pitch)
+            roll_predicted = F.softmax(roll)
 
-                # Get continuous predictions in degrees.
-                yaw_predicted = torch.sum(yaw_predicted.data[0] * idx_tensor) * 3 - 99
-                pitch_predicted = torch.sum(pitch_predicted.data[0] * idx_tensor) * 3 - 99
-                roll_predicted = torch.sum(roll_predicted.data[0] * idx_tensor) * 3 - 99
+            yaw_predicted = torch.sum(yaw_predicted.data[0] * idx_tensor) * 3 - 99
+            pitch_predicted = torch.sum(pitch_predicted.data[0] * idx_tensor) * 3 - 99
+            roll_predicted = torch.sum(roll_predicted.data[0] * idx_tensor) * 3 - 99
 
-                #utils.plot_pose_cube(frame, yaw_predicted, pitch_predicted, roll_predicted, (x_min + x_max) / 2, (y_min + y_max) / 2, size = bbox_width)
-                utils.draw_axis(frame, yaw_predicted, pitch_predicted, roll_predicted, tdx = (x_min + x_max) / 2, tdy= (y_min + y_max) / 2, size = bbox_height/2)
-                cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0,255,0), 1)
+            print (yaw_predicted)
+
+            #utils.plot_pose_cube(frame, yaw_predicted, pitch_predicted, roll_predicted, (det.x + det.x2) / 2, (det.y + det.y2) / 2, size = 80)
+            utils.draw_axis(frame, yaw_predicted, pitch_predicted, roll_predicted, tdx = (det.x + det.x2) / 2, tdy= (det.y + det.y2) / 2, size = 80)
+            cv2.rectangle(frame, (det.x, det.y), (det.x2, det.y2), (0,255,0), 1)
         cv2.imshow("f",frame)
         cv2.waitKey(1)

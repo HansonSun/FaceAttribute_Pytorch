@@ -47,7 +47,7 @@ class MobileNet(nn.Module):
         self.fc_yaw   = nn.Conv2d(depth(1024), num_bins,kernel_size=1)
         self.fc_pitch = nn.Conv2d(depth(1024), num_bins,kernel_size=1)
         self.fc_roll  = nn.Conv2d(depth(1024), num_bins,kernel_size=1)
-        self.global_pool=nn.MaxPool2d(7)
+        self.global_pool=nn.MaxPool2d(4)
 
 
     def forward(self, x):
@@ -55,34 +55,24 @@ class MobileNet(nn.Module):
         #print(x.shape)
         x=self.global_pool(x)
         #print (x.shape)
-
-
         pre_yaw   = self.fc_yaw(x)
         pre_pitch = self.fc_pitch(x)
         pre_roll  = self.fc_roll(x)
 
-        pre_yaw.squeeze_(3)
-        pre_yaw.squeeze_(2)
+        return aaa, pre_pitch, pre_roll  
 
-        pre_pitch.squeeze_(3)
-        pre_pitch.squeeze_(2)
 
-        pre_roll.squeeze_(3)
-        pre_roll.squeeze_(2)
-
-        return pre_yaw, pre_pitch, pre_roll  
+def inference():
+    return MobileNet(67,0.75)
 
 
 if __name__ == '__main__':
-    net = MobileNet(67)
-
-
+    net = inference( )
     net.eval()
-    x = torch.randn(1, 3, 112, 112)
+    for param in net.parameters():
+        param.requires_grad = False
 
-    #torch.save(net.state_dict(),'test.pkl')
-    yaw,pitch,roll = net(Variable(x))
-    #print (yaw.shape)
-    #torch.onnx.export(net,x,"test.onnx")
+    x = torch.randn(1, 3, 112, 112)
+    torch.onnx.export(net,x,"test.onnx")
 
 

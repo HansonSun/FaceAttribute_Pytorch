@@ -1,8 +1,5 @@
 import sys, os, argparse, time
-
-import numpy as np
-import cv2
-import matplotlib.pyplot as plt
+sys.path.append("model")
 
 import torch
 import torch.nn as nn
@@ -12,10 +9,10 @@ from torchvision import transforms
 import torchvision
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
-
-import datasets, mobilenet
+import datasets
 import torch.utils.model_zoo as model_zoo
-import utils
+import importlib
+from torch.optim.lr_scheduler import MultiStepLR
 
 def parse_args():
     """Parse input arguments."""
@@ -23,26 +20,23 @@ def parse_args():
     parser.add_argument('--gpu', dest='gpu_id', help='GPU device id to use [0]',
             default=0, type=int)
     parser.add_argument('--num_epochs', dest='num_epochs', help='Maximum number of training epochs.',
-          default=100, type=int)
+          default=5, type=int)
     parser.add_argument('--batch_size', dest='batch_size', help='Batch size.',
           default=32, type=int)
     parser.add_argument('--lr', dest='lr', help='Base learning rate.',
-          default=0.01, type=float)
-    parser.add_argument('--dataset', dest='dataset', help='Dataset type.', default='Pose_300W_LP', type=str)
-    parser.add_argument('--data_dir', dest='data_dir', help='Directory path for data.',
-          default='', type=str)
-    parser.add_argument('--filename_list', dest='filename_list', help='Path to text file containing relative paths for every example.',
-          default='labelfile.txt', type=str)
+          default=0.0001, type=float)
     parser.add_argument('--output_string', dest='output_string', help='String appended to output snapshots.', default = 'test', type=str)
     parser.add_argument('--alpha', dest='alpha', help='Regression loss coefficient.',
           default=0.001, type=float)
+    parser.add_argument('--snapshot', dest='snapshot', help='Path of model snapshot.',
+          default='', type=str)
 
     args = parser.parse_args()
     return args
 
 def get_ignored_params(model):
     # Generator function that yields ignored params.
-    b = [model.conv1, model.bn1, model.fc_finetune]
+    b = [model.conv1, model.bn1]
     for i in range(len(b)):
         for module_name, module in b[i].named_modules():
             if 'bn' in module_name:
@@ -86,25 +80,25 @@ if __name__ == '__main__':
     if not os.path.exists('output/snapshots'):
         os.makedirs('output/snapshots')
 
-    # Mobilenet structure
-    model = mobilenet.MobileNet(67,0.75)
+    model=importlib.import_module("resnet").inference()
 
-    paras_only_bn, paras_wo_bn = utils.separate_bn_paras( model )
-    #print (paras_only_bn)
-
-    print 'Loading data.'
-
-    transformations = transforms.Compose([transforms.Resize(210),
-    transforms.RandomCrop(192), transforms.ToTensor(),
-    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])])
-
-    if args.dataset == 'Pose_300W_LP':
-        pose_dataset = datasets.Pose_300W_LP(args.data_dir, args.filename_list, transformations)
-    elif args.dataset == 'Synhead':
-        pose_dataset = datasets.Synhead(args.data_dir, args.filename_list, transformations)
+    '''
+    if args.snapshot == '':
+        print("lodel pretrain model")
+        load_filtered_state_dict(model, model_zoo.load_url('https://download.pytorch.org/models/resnet18-5c106cde.pth'))
     else:
-        print 'Error: not a valid dataset name'
-        sys.exit()
+        saved_state_dict = torch.load(args.snapshot)
+        model.load_state_dict(saved_state_dict)
+    '''
+
+    transformations = transforms.Compose([transforms.Resize(128),
+    transforms.RandomCrop(112), transforms.ToTensor(),
+    transforms.Normalize(mean=[0.4, 0.4, 0.4], std=[0.2, 0.2, 0.2])])
+
+
+    pose_dataset = datasets.Pose_300W_LP(transformations)
+
+
 
     train_loader = torch.utils.data.DataLoader(dataset=pose_dataset,
                                                batch_size=batch_size,
@@ -118,22 +112,20 @@ if __name__ == '__main__':
     alpha = args.alpha
 
     softmax = nn.Softmax(dim=1).cuda(gpu)
-    idx_tensor = [idx for idx in xrange(67)]
+    idx_tensor = [idx for idx in range(67)]
     idx_tensor = Variable(torch.FloatTensor(idx_tensor)).cuda(gpu)
 
-    
-    optimizer = torch.optim.Adam(model.parameters(),lr = args.lr)
-    
-
-    '''
     optimizer = torch.optim.Adam([{'params': get_ignored_params(model), 'lr': 0},
                                   {'params': get_non_ignored_params(model), 'lr': args.lr},
                                   {'params': get_fc_params(model), 'lr': args.lr * 5}],
                                    lr = args.lr)
-    '''
 
-    print 'Ready to train network.'
+    lr_scheduler=MultiStepLR(optimizer, [30,80], gamma=0.1, last_epoch=-1)
+
+    print ('Ready to train network.')
     for epoch in range(num_epochs):
+        lr_scheduler.step()
+
         for i, (images, labels, cont_labels, name) in enumerate(train_loader):
             images = Variable(images).cuda(gpu)
 
@@ -149,7 +141,12 @@ if __name__ == '__main__':
 
             # Forward pass
             yaw, pitch, roll = model(images)
-            #cal classification acc
+
+            yaw=yaw.view(-1,yaw.size(1))
+            pitch=pitch.view(-1,pitch.size(1))
+            roll=roll.view(-1,roll.size(1))
+
+
             yaw_acc  = yaw.argmax(dim=1).eq(label_yaw).float().mean()
             pitch_acc= pitch.argmax(dim=1).eq(label_pitch).float().mean()
             roll_acc = roll.argmax(dim=1).eq(label_roll).float().mean()
@@ -160,8 +157,6 @@ if __name__ == '__main__':
             loss_pitch = criterion(pitch, label_pitch)
             #print (label_roll)
             loss_roll = criterion(roll, label_roll)
-
-
 
             # MSE loss
             yaw_predicted = softmax(yaw)
@@ -194,6 +189,6 @@ if __name__ == '__main__':
 
         # Save models at numbered epochs.
         if epoch % 1 == 0 and epoch < num_epochs:
-            print 'Taking snapshot...'
+            print ('Taking snapshot...')
             torch.save(model.state_dict(),
             'output/snapshots/' + args.output_string + '_epoch_'+ str(epoch+1) + '.pkl')
